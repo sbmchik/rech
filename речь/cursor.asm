@@ -1,3 +1,4 @@
+
 BITS 32
 
 global cur_ptr, cur_line, cur_col, cur_init, cur_peek, cur_next, cur_skip_ws
@@ -82,3 +83,6 @@ cur_skip_ws:
 .adv:
     call cur_next
     jmp .loop
+
+
+

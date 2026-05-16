@@ -1,3 +1,4 @@
+
 BITS 32
 
 extern _CreateFileW@28
@@ -13,6 +14,7 @@ extern _GetFileSize@8
 
 global platform_init
 global platform_read_file
+global platform_free_buffer
 global platform_last_error
 global platform_last_stage
 
@@ -40,6 +42,32 @@ platform_init:
 
     ;push dword CP_UTF8
     ;call _SetConsoleOutputCP@4
+    ret
+
+; cdecl:
+;   platform_free_buffer(ptr)
+platform_free_buffer:
+    push ebp
+    mov ebp, esp
+    push ebx
+
+    mov ebx, [ebp+8]
+    test ebx, ebx
+    jz .done
+
+    call _GetProcessHeap@0
+    test eax, eax
+    jz .done
+
+    push ebx
+    push dword 0
+    push eax
+    call _HeapFree@12
+
+.done:
+    pop ebx
+    mov esp, ebp
+    pop ebp
     ret
 
 ; cdecl:
@@ -174,3 +202,5 @@ platform_read_file:
     mov esp, ebp
     pop ebp
     ret
+
+

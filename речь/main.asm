@@ -1,3 +1,4 @@
+
 BITS 32
 
 extern parser_run
@@ -6,6 +7,7 @@ extern rt_init
 extern rt_error_string
 extern platform_init
 extern platform_read_file
+extern platform_free_buffer
 extern platform_last_error
 extern platform_last_stage
 
@@ -30,9 +32,10 @@ msg_nl db 13, 10
 msg_nl_len equ $ - msg_nl
 
 section .bss
-argc        resd 1
-input_ptr   resd 1
-int_buf      resb 16
+argc          resd 1
+input_ptr     resd 1
+file_base_ptr resd 1
+int_buf       resb 16
 
 section .text
 
@@ -64,6 +67,7 @@ _start:
     cmp eax, -1
     je .free_and_openfail
 
+    mov [file_base_ptr], eax
     mov esi, eax                  ; ESI = buffer with file contents
 
     cmp byte [esi], 0EFh
@@ -83,6 +87,11 @@ _start:
     mov eax, [input_ptr]
     call parser_run
     mov edi, eax
+
+    mov eax, [file_base_ptr]
+    push eax
+    call platform_free_buffer
+    add esp, 4
 
     push ebx
     call _LocalFree@4
@@ -177,3 +186,5 @@ u32_to_dec:
     pop edx
     pop ebx
     ret
+
+

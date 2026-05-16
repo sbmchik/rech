@@ -1,6 +1,7 @@
+
 BITS 32
 
-extern lex_next, token_type, token_value, token_len
+extern lex_next, token_type, token_value, token_len, token_overflow
 extern token_start_line, token_start_col
 extern cur_line, cur_col
 extern cur_ptr, cur_peek, cur_next, cur_skip_ws
@@ -8,6 +9,7 @@ extern rt_print_int, rt_print_string
 extern rt_error_pos
 
 global parser_run
+global parse_failed
 
 %define TOK_INT    1
 %define TOK_STRING 2
@@ -97,6 +99,9 @@ msg_expected_stmt_len equ $ - msg_expected_stmt
 
 msg_expected_value db "ожидалось значение."
 msg_expected_value_len equ $ - msg_expected_value
+
+msg_int_too_big db "целое число вне диапазона."
+msg_int_too_big_len equ $ - msg_int_too_big
 
 msg_unknown_var db "неизвестная переменная."
 msg_unknown_var_len equ $ - msg_unknown_var
@@ -286,6 +291,11 @@ ensure_var_slot:
 ; ----------------------------------------------------------------------
 parse_say:
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok:
 
     cmp dword [token_type], TOK_INT
     je .int
@@ -356,6 +366,11 @@ parse_say:
 ; ----------------------------------------------------------------------
 parse_pust:
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok1
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok1:
     cmp dword [token_type], TOK_IDENT
     jne .bad_ident
 
@@ -365,10 +380,20 @@ parse_pust:
     mov [tmp_name_len], eax
 
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok2
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok2:
     cmp dword [token_type], TOK_BUDET
     jne .bad_budet
 
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok3
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok3:
     cmp dword [token_type], TOK_TYPE_INT
     je .want_int
     cmp dword [token_type], TOK_TYPE_STR
@@ -381,6 +406,11 @@ parse_pust:
 
 .want_int:
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok4
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok4:
     cmp dword [token_type], TOK_INT
     je .int_init
 
@@ -389,6 +419,11 @@ parse_pust:
 
 .want_str:
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok5
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok5:
     cmp dword [token_type], TOK_STRING
     je .str_init
 
@@ -397,6 +432,11 @@ parse_pust:
 
 .want_var:
     call lex_next
+    cmp dword [token_overflow], 0
+    je .lex_ok6
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+.lex_ok6:
     cmp dword [token_type], TOK_IDENT
     je .var_init
 
@@ -709,6 +749,11 @@ parse_all:
     jne .done
 
     call lex_next
+    cmp dword [token_overflow], 0
+    je .no_overflow_top
+    FAIL msg_int_too_big, msg_int_too_big_len
+    jmp .done
+.no_overflow_top:
     cmp dword [token_type], TOK_EOF
     je .done
 
@@ -736,6 +781,11 @@ parse_all:
     mov [err_col], eax
 
     call lex_next
+    cmp dword [token_overflow], 0
+    je .no_overflow_dot1
+    FAIL msg_int_too_big, msg_int_too_big_len
+    jmp .done
+.no_overflow_dot1:
     cmp dword [token_type], TOK_DOT
     je .loop
 
@@ -753,6 +803,11 @@ parse_all:
     mov [err_col], eax
 
     call lex_next
+    cmp dword [token_overflow], 0
+    je .no_overflow_dot2
+    FAIL msg_int_too_big, msg_int_too_big_len
+    jmp .done
+.no_overflow_dot2:
     cmp dword [token_type], TOK_DOT
     je .loop
 
@@ -799,3 +854,5 @@ parser_run:
 .done:
     mov eax, [parse_failed]
     ret
+
+

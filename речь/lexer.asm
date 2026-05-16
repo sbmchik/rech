@@ -4,9 +4,10 @@ extern cur_ptr, cur_peek, cur_next, cur_skip_ws, cur_line, cur_col
 
 global lex_next, token_type, token_value, token_len
 global token_start_line, token_start_col
+global token_overflow
 global try_kw
 
-%define TOK_INT    1
+%define TOK_INT       1
 %define TOK_STRING    2
 %define TOK_SAY       3
 %define TOK_PUST      4
@@ -17,6 +18,11 @@ global try_kw
 %define TOK_IDENT     8
 %define TOK_DOT       9
 %define TOK_EOF       10
+
+%define INT32_MAX_DIV10 214748364
+%define INT32_MAX_MOD10 7
+%define INT32_MIN_ABS_DIV10 214748364
+%define INT32_MIN_ABS_MOD10 8
 
 section .data
 kw_say        db 0D0h,0A1h,0D0h,0BAh,0D0h,0B0h,0D0h,0B6h,0D0h,0B8h
@@ -43,6 +49,7 @@ token_value      resd 1
 token_len        resd 1
 token_start_line resd 1
 token_start_col  resd 1
+token_overflow   resd 1
 
 int_negative     resd 1
 
@@ -120,6 +127,8 @@ try_kw:
     ret
 
 lex_next:
+    mov dword [token_overflow], 0
+
     call cur_skip_ws
 
     mov eax, [cur_line]
@@ -142,7 +151,7 @@ lex_next:
     cmp al, '0'
     jb .word
     cmp al, '9'
-    jbe .int
+    jbe .int_start
 
 .word:
     lea esi, [kw_say]
@@ -221,7 +230,7 @@ lex_next:
 .signed_int:
     call cur_peek
     cmp al, '-'
-    jne .int
+    jne .int_start
 
     call cur_next
     call cur_peek
@@ -231,15 +240,23 @@ lex_next:
     ja .fail
 
     mov dword [int_negative], 1
-    jmp .int
+    jmp .int_body
 
-.int:
+.int_start:
     mov dword [int_negative], 0
+
+.int_body:
     xor ecx, ecx
     xor edx, edx
 
     mov eax, [cur_ptr]
     mov [token_value], eax
+
+    mov ebx, INT32_MAX_DIV10
+    mov edi, INT32_MAX_MOD10
+    cmp dword [int_negative], 0
+    je .int_loop
+    mov edi, INT32_MIN_ABS_MOD10
 
 .int_loop:
     call cur_peek
@@ -248,11 +265,24 @@ lex_next:
     cmp al, '9'
     ja .int_done
 
-    imul edx, edx, 10
     movzx eax, al
     sub eax, '0'
-    add edx, eax
 
+    cmp edx, ebx
+    ja .overflow
+    jb .accumulate
+    cmp eax, edi
+    ja .overflow
+
+.accumulate:
+    imul edx, edx, 10
+    add edx, eax
+    call cur_next
+    inc ecx
+    jmp .int_loop
+
+.overflow:
+    mov dword [token_overflow], 1
     call cur_next
     inc ecx
     jmp .int_loop
@@ -312,4 +342,3 @@ lex_next:
 
 .done:
     ret
-

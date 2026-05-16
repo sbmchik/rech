@@ -1,3 +1,4 @@
+
 BITS 32
 
 extern _GetStdHandle@4
@@ -327,3 +328,6 @@ rt_error_pos:
     mov esp, ebp
     pop ebp
     ret
+
+
+

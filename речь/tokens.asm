@@ -1,3 +1,4 @@
+
 BITS 32
 
 global TOK_INT, TOK_STRING, TOK_SAY, TOK_PUST, TOK_BUDET
@@ -14,3 +15,5 @@ TOK_TYPE_VAR  equ 11
 TOK_IDENT     equ 8
 TOK_DOT       equ 9
 TOK_EOF       equ 10
+
+
