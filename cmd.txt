@@ -1,0 +1,2 @@
+gcc -m32 main.obj parser.obj lexer.obj cursor.obj runtime.obj -o main.exe
+nasm -f win32 main.asm -o main.obj
