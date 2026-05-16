@@ -441,12 +441,9 @@ parse_pust:
 ; ----------------------------------------------------------------------
 execute_all:
     xor esi, esi
-    mov ecx, [instr_count]
-    test ecx, ecx
-    jz .done
 
 .loop:
-    cmp esi, ecx
+    cmp esi, [instr_count]
     je .done
 
     mov eax, [instr_opcode + esi*4]
@@ -467,16 +464,27 @@ execute_all:
     jmp .next
 
 .say_num:
-    push dword [instr_arg1 + esi*4]
+    mov eax, [instr_arg1 + esi*4]
+    push ecx
+    push esi
+    push eax
     call rt_print_number
     add esp, 4
+    pop esi
+    pop ecx
     jmp .next
 
 .say_str:
-    push dword [instr_arg2 + esi*4]
-    push dword [instr_arg1 + esi*4]
+    mov eax, [instr_arg1 + esi*4]
+    mov edx, [instr_arg2 + esi*4]
+    push ecx
+    push esi
+    push edx
+    push eax
     call rt_print_string
     add esp, 8
+    pop esi
+    pop ecx
     jmp .next
 
 .say_var:
@@ -486,21 +494,30 @@ execute_all:
     cmp byte [var_type + eax], 2
     je .say_var_str
     jmp .next
+
 .say_var_int:
-    push dword [var_int + eax*4]
+    mov eax, [var_int + eax*4]
+    push ecx
+    push esi
+    push eax
     call rt_print_number
     add esp, 4
+    pop esi
+    pop ecx
     jmp .next
+    
 .say_var_str:
     mov edx, eax
-    push edx
     imul eax, edx, STR_SLOT_SIZE
     lea eax, [var_str + eax]
+    push ecx
+    push esi
     push dword [var_str_len + edx*4]
     push eax
     call rt_print_string
     add esp, 8
-    pop edx
+    pop esi
+    pop ecx
     jmp .next
 
 .pust_int_num:
@@ -518,6 +535,7 @@ execute_all:
 
 .pust_str_str:
     push esi
+    push ecx
     mov eax, [instr_arg1 + esi*4]
     mov ecx, [instr_arg2 + esi*4]
     mov edx, [instr_arg3 + esi*4]
@@ -530,23 +548,31 @@ execute_all:
     mov byte [edi], 0
     pop ecx
     mov [var_str_len + eax*4], edx
+    pop ecx
     pop esi
     jmp .next
 
 .pust_str_var:
+    push esi
     mov eax, [instr_arg1 + esi*4]
     mov ecx, [instr_arg2 + esi*4]
+
     imul ebx, ecx, STR_SLOT_SIZE
     lea esi, [var_str + ebx]
+
     mov edx, [var_str_len + ecx*4]
+
     imul ebx, eax, STR_SLOT_SIZE
     lea edi, [var_str + ebx]
+
     push eax
     mov ecx, edx
     rep movsb
     mov byte [edi], 0
     pop eax
+
     mov [var_str_len + eax*4], edx
+    pop esi
     jmp .next
 
 .next:
