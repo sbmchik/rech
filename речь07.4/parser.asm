@@ -23,7 +23,7 @@ global parser_run
 %define STR_SLOT_SIZE 512
 %define MAX_INSTRUCTIONS 4096
 
-; Opcodes for instructions
+; Opcodes for instructions (IR - Intermediate Representation)
 %define OP_SAY_NUM       1
 %define OP_SAY_STR       2
 %define OP_SAY_VAR       3
@@ -80,9 +80,6 @@ msg_expected_str_source_len equ $ - msg_expected_str_source
 msg_expected_dot db "ожидалась точка."
 msg_expected_dot_len equ $ - msg_expected_dot
 
-msg_var_redeclared db "переменная уже объявлена."
-msg_var_redeclared_len equ $ - msg_var_redeclared
-
 section .bss
 var_count    resd 1
 var_type     resb MAXVARS
@@ -99,7 +96,7 @@ parse_failed resd 1
 err_line     resd 1
 err_col      resd 1
 
-; Instruction storage
+; Instruction storage (IR array)
 instr_opcode   resd MAX_INSTRUCTIONS
 instr_arg1     resd MAX_INSTRUCTIONS
 instr_arg2     resd MAX_INSTRUCTIONS
@@ -109,8 +106,6 @@ instr_count    resd 1
 section .text
 
 find_var:
-    ; ESI = name ptr
-    ; EDI = name len
     push ebx
     xor ebx, ebx
 
@@ -153,8 +148,24 @@ find_var:
     pop ebx
     ret
 
-; Allocate a new variable slot (without filling name/type)
-; Returns index in eax, or -1 if full
+ensure_var_slot:
+    call find_var
+    cmp eax, -1
+    jne .done
+
+    mov eax, [var_count]
+    cmp eax, MAXVARS
+    jae .too_many
+
+    inc dword [var_count]
+.done:
+    ret
+
+.too_many:
+    mov eax, -1
+    ret
+
+; Allocate a new variable slot without checking existence (for first pass)
 alloc_var_slot:
     mov eax, [var_count]
     cmp eax, MAXVARS
@@ -164,10 +175,6 @@ alloc_var_slot:
 .full:
     mov eax, -1
     ret
-
-; ----------------------------------------------------------------------
-; First pass: build instruction list
-; ----------------------------------------------------------------------
 
 parse_say:
     call lex_next
@@ -223,7 +230,6 @@ parse_pust:
     cmp dword [token_type], TOK_IDENT
     jne .bad_ident
 
-    ; remember variable name
     mov eax, [token_value]
     mov [tmp_name_ptr], eax
     mov eax, [token_len]
@@ -243,6 +249,14 @@ parse_pust:
     FAIL msg_expected_type, msg_expected_type_len
     ret
 
+.bad_ident:
+    FAIL msg_expected_ident, msg_expected_ident_len
+    ret
+
+.bad_budet:
+    FAIL msg_expected_budet, msg_expected_budet_len
+    ret
+
 .int_decl:
     call lex_next
     cmp dword [token_type], TOK_NUMBER
@@ -254,27 +268,23 @@ parse_pust:
     ret
 
 .int_num_init:
-    ; check redeclaration
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    ; allocate slot
     call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
 
-    ; fill name and type
+    mov byte [var_type + ebx], 1
     mov eax, [tmp_name_ptr]
     mov [var_name_ptr + ebx*4], eax
     mov eax, [tmp_name_len]
     mov [var_name_len + ebx*4], eax
-    mov byte [var_type + ebx], 1          ; int
 
-    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_INT_NUM
     mov [instr_arg1 + eax*4], ebx
@@ -291,29 +301,25 @@ parse_pust:
     je .unknown_src_int
     cmp byte [var_type + eax], 1
     jne .wrong_src_int
-    mov edx, eax                     ; source index
+    mov edx, eax
 
-    ; check redeclaration of target
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    ; allocate slot
     call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
 
-    ; fill name and type
+    mov byte [var_type + ebx], 1
     mov eax, [tmp_name_ptr]
     mov [var_name_ptr + ebx*4], eax
     mov eax, [tmp_name_len]
     mov [var_name_len + ebx*4], eax
-    mov byte [var_type + ebx], 1
 
-    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_INT_VAR
     mov [instr_arg1 + eax*4], ebx
@@ -329,6 +335,15 @@ parse_pust:
     FAIL msg_expected_int_source, msg_expected_int_source_len
     ret
 
+.redeclared:
+    cmp byte [var_type + eax], 1
+    jne .type_mismatch_int
+    jmp .bad
+
+.type_mismatch_int:
+    FAIL msg_expected_int_source, msg_expected_int_source_len
+    ret
+
 .str_decl:
     call lex_next
     cmp dword [token_type], TOK_STRING
@@ -340,27 +355,23 @@ parse_pust:
     ret
 
 .str_str_init:
-    ; check redeclaration
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
-    jne .redeclared
+    jne .redeclared_str
 
-    ; allocate slot
     call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
 
-    ; fill name and type
+    mov byte [var_type + ebx], 2
     mov eax, [tmp_name_ptr]
     mov [var_name_ptr + ebx*4], eax
     mov eax, [tmp_name_len]
     mov [var_name_len + ebx*4], eax
-    mov byte [var_type + ebx], 2          ; str
 
-    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_STR_STR
     mov [instr_arg1 + eax*4], ebx
@@ -381,27 +392,23 @@ parse_pust:
     jne .wrong_src_str
     mov edx, eax
 
-    ; check redeclaration of target
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
-    jne .redeclared
+    jne .redeclared_str
 
-    ; allocate slot
     call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
 
-    ; fill name and type
+    mov byte [var_type + ebx], 2
     mov eax, [tmp_name_ptr]
     mov [var_name_ptr + ebx*4], eax
     mov eax, [tmp_name_len]
     mov [var_name_len + ebx*4], eax
-    mov byte [var_type + ebx], 2
 
-    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_STR_VAR
     mov [instr_arg1 + eax*4], ebx
@@ -417,16 +424,13 @@ parse_pust:
     FAIL msg_expected_str_source, msg_expected_str_source_len
     ret
 
-.bad_ident:
-    FAIL msg_expected_ident, msg_expected_ident_len
-    ret
+.redeclared_str:
+    cmp byte [var_type + eax], 2
+    jne .type_mismatch_str
+    jmp .bad
 
-.bad_budet:
-    FAIL msg_expected_budet, msg_expected_budet_len
-    ret
-
-.redeclared:
-    FAIL msg_var_redeclared, msg_var_redeclared_len
+.type_mismatch_str:
+    FAIL msg_expected_str_source, msg_expected_str_source_len
     ret
 
 .bad:
@@ -435,7 +439,6 @@ parse_pust:
 ; ----------------------------------------------------------------------
 ; Second pass: execute instructions
 ; ----------------------------------------------------------------------
-
 execute_all:
     xor esi, esi
     mov ecx, [instr_count]
@@ -477,12 +480,12 @@ execute_all:
     jmp .next
 
 .say_var:
-    mov eax, [instr_arg1 + esi*4]       ; var index
+    mov eax, [instr_arg1 + esi*4]
     cmp byte [var_type + eax], 1
     je .say_var_int
     cmp byte [var_type + eax], 2
     je .say_var_str
-    jmp .next                           ; should not happen
+    jmp .next
 .say_var_int:
     push dword [var_int + eax*4]
     call rt_print_number
@@ -490,53 +493,59 @@ execute_all:
     jmp .next
 .say_var_str:
     mov edx, eax
+    push edx
     imul eax, edx, STR_SLOT_SIZE
     lea eax, [var_str + eax]
     push dword [var_str_len + edx*4]
     push eax
     call rt_print_string
     add esp, 8
+    pop edx
     jmp .next
 
 .pust_int_num:
-    mov eax, [instr_arg1 + esi*4]       ; target index
-    mov ecx, [instr_arg2 + esi*4]       ; value
+    mov eax, [instr_arg1 + esi*4]
+    mov ecx, [instr_arg2 + esi*4]
     mov [var_int + eax*4], ecx
     jmp .next
 
 .pust_int_var:
-    mov eax, [instr_arg1 + esi*4]       ; target index
-    mov ecx, [instr_arg2 + esi*4]       ; source index
+    mov eax, [instr_arg1 + esi*4]
+    mov ecx, [instr_arg2 + esi*4]
     mov edx, [var_int + ecx*4]
     mov [var_int + eax*4], edx
     jmp .next
 
 .pust_str_str:
-    mov eax, [instr_arg1 + esi*4]       ; target index
-    mov ecx, [instr_arg2 + esi*4]       ; string pointer
-    mov edx, [instr_arg3 + esi*4]       ; length
-    ; copy string into var_str
+    push esi
+    mov eax, [instr_arg1 + esi*4]
+    mov ecx, [instr_arg2 + esi*4]
+    mov edx, [instr_arg3 + esi*4]
     imul ebx, eax, STR_SLOT_SIZE
     lea edi, [var_str + ebx]
     mov esi, ecx
+    push ecx
     mov ecx, edx
     rep movsb
     mov byte [edi], 0
+    pop ecx
     mov [var_str_len + eax*4], edx
+    pop esi
     jmp .next
 
 .pust_str_var:
-    mov eax, [instr_arg1 + esi*4]       ; target index
-    mov ecx, [instr_arg2 + esi*4]       ; source index
-    ; copy from source to target
+    mov eax, [instr_arg1 + esi*4]
+    mov ecx, [instr_arg2 + esi*4]
     imul ebx, ecx, STR_SLOT_SIZE
     lea esi, [var_str + ebx]
     mov edx, [var_str_len + ecx*4]
     imul ebx, eax, STR_SLOT_SIZE
     lea edi, [var_str + ebx]
+    push eax
     mov ecx, edx
     rep movsb
     mov byte [edi], 0
+    pop eax
     mov [var_str_len + eax*4], edx
     jmp .next
 
@@ -550,7 +559,6 @@ execute_all:
 ; ----------------------------------------------------------------------
 ; Main parsing routine: two passes
 ; ----------------------------------------------------------------------
-
 parse_all:
 .loop:
     cmp dword [parse_failed], 0
@@ -606,7 +614,7 @@ parse_all:
 
 parser_run:
     mov dword [parse_failed], 0
-    mov dword [instr_count], 0          ; clear instruction list
+    mov dword [instr_count], 0
 
     ; First pass: parse and build instruction list
     call parse_all
