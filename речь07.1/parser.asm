@@ -1,10 +1,16 @@
 BITS 32
 
 extern lex_next, token_type, token_value, token_len
+extern token_start_line, token_start_col
+extern cur_line, cur_col
 extern rt_print_number, rt_print_string
-extern rt_error_string
+extern rt_error_pos
 
 global parser_run
+
+; Внутренние функции парсера
+global parse_say
+global parse_pust
 
 %define TOK_NUMBER    1
 %define TOK_STRING    2
@@ -21,42 +27,67 @@ global parser_run
 %define STR_SLOT_SIZE 512
 
 %macro FAIL 2
+    push dword [token_start_col]
+    push dword [token_start_line]
     push dword %2
     push dword %1
-    call rt_error_string
-    add esp, 8
+    call rt_error_pos
+    add esp, 16
+    mov dword [parse_failed], 1
+%endmacro
+
+%macro FAILHERE 2
+    push dword [err_col]
+    push dword [err_line]
+    push dword %2
+    push dword %1
+    call rt_error_pos
+    add esp, 16
     mov dword [parse_failed], 1
 %endmacro
 
 section .data
-msg_expected_stmt db "Ошибка: ожидалось начало конструкции: Скажи или Пусть."
+msg_expected_stmt db "ожидалось начало оператора."
 msg_expected_stmt_len equ $ - msg_expected_stmt
 
-msg_expected_value db "Ошибка: ожидалось число, строка или имя переменной."
+msg_expected_value db "ожидалось значение."
 msg_expected_value_len equ $ - msg_expected_value
 
-msg_unknown_var db "Ошибка: неизвестная переменная."
+msg_unknown_var db "неизвестная переменная."
 msg_unknown_var_len equ $ - msg_unknown_var
 
-msg_expected_ident db "Ошибка: ожидалось имя переменной."
+msg_expected_ident db "ожидалось имя переменной."
 msg_expected_ident_len equ $ - msg_expected_ident
 
-msg_expected_budet db "Ошибка: ожидалось слово Будет."
+msg_expected_budet db "ожидалось слово 'будет'."
 msg_expected_budet_len equ $ - msg_expected_budet
 
-msg_expected_type db "Ошибка: ожидался тип: целым числом или строкой."
+msg_expected_type db "ожидался тип."
 msg_expected_type_len equ $ - msg_expected_type
 
-msg_expected_int_source db "Ошибка: ожидалась переменная целого типа."
+msg_expected_int_source db "ожидалась переменная целого типа."
 msg_expected_int_source_len equ $ - msg_expected_int_source
 
-msg_expected_str_source db "Ошибка: ожидалась строковая переменная."
+msg_expected_str_source db "ожидалась строковая переменная."
 msg_expected_str_source_len equ $ - msg_expected_str_source
 
-msg_expected_dot db "Ошибка: ожидалась точка в конце конструкции."
+msg_expected_dot db "ожидалась точка."
 msg_expected_dot_len equ $ - msg_expected_dot
 
+%define MAX_STMTS 256
+%define STMT_SAY  1
+%define STMT_PUST 2
+
 section .bss
+; AST (Abstract Syntax Tree) для двухпроходного парсинга
+stmt_type     resb MAX_STMTS    ; тип оператора (SAY/PUST)
+stmt_value    resd MAX_STMTS    ; значение для SAY (число/указатель)
+stmt_val_len  resd MAX_STMTS    ; длина значения
+stmt_var_ptr  resd MAX_STMTS    ; указатель на имя переменной для PUST
+stmt_var_len  resd MAX_STMTS    ; длина имени переменной
+stmt_var_type resb MAX_STMTS    ; тип переменной (int/str)
+stmt_count    resd 1            ; количество операторов в AST
+
 var_count    resd 1
 var_type     resb MAXVARS
 var_name_ptr resd MAXVARS
@@ -69,6 +100,8 @@ tmp_name_ptr resd 1
 tmp_name_len resd 1
 tmp_src_idx  resd 1
 parse_failed resd 1
+err_line     resd 1
+err_col      resd 1
 
 section .text
 
@@ -135,6 +168,56 @@ ensure_var_slot:
 .too_many:
     mov eax, -1
     ret
+
+; === AST функции ===
+
+ast_add_say:
+    ; Добавить SAY оператор в AST
+    ; EAX = значение (число или указатель)
+    ; ECX = длина значения (для строк)
+    push ebx
+    mov ebx, [stmt_count]
+    cmp ebx, MAX_STMTS
+    jae .full
+    
+    mov byte [stmt_type + ebx], STMT_SAY
+    mov [stmt_value + ebx*4], eax
+    mov [stmt_val_len + ebx*4], ecx
+    inc dword [stmt_count]
+    pop ebx
+    ret
+    
+.full:
+    pop ebx
+    ret
+
+ast_add_pust:
+    ; Добавить PUST оператор в AST
+    ; ESI = указатель на имя переменной
+    ; EDI = длина имени
+    ; EAX = значение (число или указатель)
+    ; ECX = длина значения
+    ; DL = тип переменной (1=int, 2=str)
+    push ebx
+    mov ebx, [stmt_count]
+    cmp ebx, MAX_STMTS
+    jae .full
+    
+    mov byte [stmt_type + ebx], STMT_PUST
+    mov [stmt_var_ptr + ebx*4], esi
+    mov [stmt_var_len + ebx*4], edi
+    mov [stmt_value + ebx*4], eax
+    mov [stmt_val_len + ebx*4], ecx
+    mov byte [stmt_var_type + ebx], dl
+    inc dword [stmt_count]
+    pop ebx
+    ret
+    
+.full:
+    pop ebx
+    ret
+
+; === Конец AST функций ===
 
 parse_say:
     call lex_next
@@ -387,50 +470,210 @@ parse_pust:
 .bad:
     ret
 
-parser_run:
+; === ДВУХПРОХОДНОЙ ПАРСЕР (как в C++) ===
+
+parser_build_ast:
+    ; Первый проход: парсим и проверяем синтаксис, строим AST
+    mov dword [stmt_count], 0
     mov dword [parse_failed], 0
-
-.loop:
+    
+.build_loop:
     cmp dword [parse_failed], 0
-    jne .done
-
+    jne .build_done
+    
     call lex_next
-
+    
     cmp dword [token_type], TOK_EOF
-    je .done
-
+    je .build_done
+    
     cmp dword [token_type], TOK_SAY
-    je .do_say
-
+    je .build_say
+    
     cmp dword [token_type], TOK_PUST
-    je .do_pust
-
+    je .build_pust
+    
     FAIL msg_expected_stmt, msg_expected_stmt_len
-    jmp .done
+    jmp .build_done
 
-.do_say:
-    call parse_say
-    cmp dword [parse_failed], 0
-    jne .done
+.build_say:
+    call lex_next
+    cmp dword [token_type], TOK_NUMBER
+    je .say_num
+    cmp dword [token_type], TOK_STRING
+    je .say_str
+    cmp dword [token_type], TOK_IDENT
+    je .say_ident
+    
+    FAIL msg_expected_value, msg_expected_value_len
+    jmp .build_done
 
+.say_num:
+    mov eax, [token_value]
+    xor ecx, ecx
+    call ast_add_say
+    jmp .check_dot_say
+
+.say_str:
+    mov eax, [token_value]
+    mov ecx, [token_len]
+    call ast_add_say
+    jmp .check_dot_say
+
+.say_ident:
+    mov eax, [token_value]
+    mov ecx, [token_len]
+    call ast_add_say
+    jmp .check_dot_say
+
+.check_dot_say:
     call lex_next
     cmp dword [token_type], TOK_DOT
-    je .loop
-
+    je .build_loop
     FAIL msg_expected_dot, msg_expected_dot_len
-    jmp .done
+    jmp .build_done
 
-.do_pust:
-    call parse_pust
-    cmp dword [parse_failed], 0
-    jne .done
+.build_pust:
+    call lex_next
+    cmp dword [token_type], TOK_IDENT
+    jne .bad_ident
+    
+    mov esi, [token_value]
+    mov edi, [token_len]
+    
+    call lex_next
+    cmp dword [token_type], TOK_BUDET
+    jne .bad_budet
+    
+    call lex_next
+    cmp dword [token_type], TOK_TYPE_INT
+    je .pust_int_type
+    cmp dword [token_type], TOK_TYPE_STR
+    je .pust_str_type
+    
+    FAIL msg_expected_type, msg_expected_type_len
+    jmp .build_done
 
+.pust_int_type:
+    mov dl, 1
+    jmp .pust_value
+
+.pust_str_type:
+    mov dl, 2
+    jmp .pust_value
+
+.pust_value:
+    call lex_next
+    cmp dword [token_type], TOK_NUMBER
+    je .pust_num
+    cmp dword [token_type], TOK_STRING
+    je .pust_str
+    cmp dword [token_type], TOK_IDENT
+    je .pust_ident
+    
+    FAIL msg_expected_value, msg_expected_value_len
+    jmp .build_done
+
+.pust_num:
+    mov eax, [token_value]
+    xor ecx, ecx
+    call ast_add_pust
+    jmp .check_dot_pust
+
+.pust_str:
+    mov eax, [token_value]
+    mov ecx, [token_len]
+    call ast_add_pust
+    jmp .check_dot_pust
+
+.pust_ident:
+    mov eax, [token_value]
+    mov ecx, [token_len]
+    call ast_add_pust
+    jmp .check_dot_pust
+
+.check_dot_pust:
     call lex_next
     cmp dword [token_type], TOK_DOT
-    je .loop
-
+    je .build_loop
     FAIL msg_expected_dot, msg_expected_dot_len
+    jmp .build_done
 
+.bad_ident:
+    FAIL msg_expected_ident, msg_expected_ident_len
+    jmp .build_done
+
+.bad_budet:
+    FAIL msg_expected_budet, msg_expected_budet_len
+    jmp .build_done
+
+.build_done:
+    ret
+
+; === Второй проход: исполнение AST ===
+
+parser_exec_ast:
+    mov dword [parse_failed], 0
+    xor ecx, ecx
+
+.exec_loop:
+    cmp ecx, [stmt_count]
+    jge .exec_done
+    
+    mov al, [stmt_type + ecx]
+    cmp al, STMT_SAY
+    je .exec_say
+    cmp al, STMT_PUST
+    je .exec_pust
+    
+    inc ecx
+    jmp .exec_loop
+
+.exec_say:
+    mov eax, [stmt_value + ecx*4]
+    mov edx, [stmt_val_len + ecx*4]
+    
+    cmp edx, 0
+    je .exec_say_num
+    
+    ; строка
+    push edx
+    push eax
+    call rt_print_string
+    add esp, 8
+    jmp .next_stmt
+
+.exec_say_num:
+    push eax
+    call rt_print_number
+    add esp, 4
+    jmp .next_stmt
+
+.exec_pust:
+    ; Пока просто пропускаем - переменные создаются в старом parse_pust
+    ; TODO: реализовать создание переменных во втором проходе
+    inc ecx
+    jmp .exec_loop
+
+.next_stmt:
+    inc ecx
+    jmp .exec_loop
+
+.exec_done:
+    ret
+
+; === КОНЕЦ ДВУХПРОХОДНОГО ПАРСЕРА ===
+
+parser_run:
+    ; ДВУХПРОХОДНОЙ ПАРСЕР как в C++:
+    ; 1. Проверяем весь синтаксис, строим AST
+    ; 2. Если нет ошибок - исполняем AST
+    
+    call parser_build_ast
+    cmp dword [parse_failed], 0
+    jne .done
+    
+    call parser_exec_ast
+    
 .done:
     mov eax, [parse_failed]
     ret

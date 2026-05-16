@@ -1,8 +1,9 @@
 BITS 32
 
-extern cur_ptr, cur_peek, cur_next, cur_skip_ws
+extern cur_ptr, cur_peek, cur_next, cur_skip_ws, cur_line, cur_col
 
 global lex_next, token_type, token_value, token_len
+global token_start_line, token_start_col
 
 %define TOK_NUMBER    1
 %define TOK_STRING    2
@@ -38,9 +39,11 @@ kw_str_en     db "str"
 kw_str_en_len equ $ - kw_str_en
 
 section .bss
-token_type  resd 1
-token_value resd 1
-token_len   resd 1
+token_type       resd 1
+token_value      resd 1
+token_len        resd 1
+token_start_line resd 1
+token_start_col  resd 1
 
 section .text
 
@@ -84,6 +87,13 @@ try_kw:
     je .advance
     cmp al, '"'
     je .advance
+    ; неразрывный пробел U+00A0 в UTF-8: C2 A0
+    cmp al, 0C2h
+    jne .fail
+    mov ebx, [cur_ptr]
+    add ebx, ecx
+    cmp byte [ebx+1], 0A0h
+    je .advance
     jmp .fail
 
 .advance:
@@ -110,6 +120,11 @@ try_kw:
 
 lex_next:
     call cur_skip_ws
+
+    mov eax, [cur_line]
+    mov [token_start_line], eax
+    mov eax, [cur_col]
+    mov [token_start_col], eax
 
     call cur_peek
     cmp al, 0

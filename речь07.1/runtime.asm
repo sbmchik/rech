@@ -10,6 +10,7 @@ global rt_init
 global rt_print_number
 global rt_print_string
 global rt_error_string
+global rt_error_pos
 
 %define STD_OUTPUT_HANDLE -11
 %define STD_ERROR_HANDLE  -12
@@ -18,6 +19,15 @@ global rt_error_string
 section .data
 nl  db 10
 nlw dw 10
+
+err_prefix db "Ошибка ("
+err_prefix_len equ $ - err_prefix
+
+colon db ":"
+colon_len equ 1
+
+msg_sep db "): "
+msg_sep_len equ $ - msg_sep
 
 section .bss
 hStdout     resd 1
@@ -110,6 +120,7 @@ write_utf8:
     call _WriteFile@20
 
 .newline:
+    mov edx, [ebp+24]
     test edx, edx
     jz .done
 
@@ -139,6 +150,48 @@ write_utf8:
     pop edi
     pop esi
     pop ebx
+    mov esp, ebp
+    pop ebp
+    ret
+
+; rt_write_uint_stderr(u32 value) — десятичная запись в stderr без перевода строки
+rt_write_uint_stderr:
+    push ebp
+    mov ebp, esp
+
+    mov eax, [ebp+8]
+    lea edi, [num_buf+31]
+    mov byte [edi], 0
+    mov ebx, 10
+
+    cmp eax, 0
+    jne .digits
+
+    dec edi
+    mov byte [edi], '0'
+    jmp .out_ready
+
+.digits:
+.loop:
+    xor edx, edx
+    div ebx
+    add dl, '0'
+    dec edi
+    mov [edi], dl
+    test eax, eax
+    jnz .loop
+
+.out_ready:
+    lea ecx, [num_buf+31]
+    sub ecx, edi
+
+    push dword 0
+    push ecx
+    push edi
+    push dword [err_console]
+    push dword [hStderr]
+    call write_utf8
+
     mov esp, ebp
     pop ebp
     ret
@@ -220,6 +273,56 @@ rt_error_string:
     push dword [err_console]
     push dword [hStderr]
     call write_utf8
+
+    mov esp, ebp
+    pop ebp
+    ret
+
+; void rt_error_pos(const char* msg, int len, int line, int col);
+rt_error_pos:
+    push ebp
+    mov ebp, esp
+
+    push dword 0
+    push dword err_prefix_len
+    push dword err_prefix
+    push dword [err_console]
+    push dword [hStderr]
+    call write_utf8
+    add esp, 20
+
+    push dword 0
+    push dword [ebp+16]
+    call rt_write_uint_stderr
+    add esp, 4
+
+    push dword 0
+    push dword colon_len
+    push dword colon
+    push dword [err_console]
+    push dword [hStderr]
+    call write_utf8
+    add esp, 20
+
+    push dword [ebp+20]
+    call rt_write_uint_stderr
+    add esp, 4
+
+    push dword 0
+    push dword msg_sep_len
+    push dword msg_sep
+    push dword [err_console]
+    push dword [hStderr]
+    call write_utf8
+    add esp, 20
+
+    push dword 1
+    push dword [ebp+12]
+    push dword [ebp+8]
+    push dword [err_console]
+    push dword [hStderr]
+    call write_utf8
+    add esp, 20
 
     mov esp, ebp
     pop ebp
