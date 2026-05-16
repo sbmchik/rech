@@ -2,6 +2,7 @@ BITS 32
 
 extern lex_next, token_type, token_value, token_len
 extern rt_print_number, rt_print_string
+extern rt_error_string
 
 global parser_run
 
@@ -19,6 +20,42 @@ global parser_run
 %define MAXVARS 64
 %define STR_SLOT_SIZE 512
 
+%macro FAIL 2
+    push dword %2
+    push dword %1
+    call rt_error_string
+    add esp, 8
+    mov dword [parse_failed], 1
+%endmacro
+
+section .data
+msg_expected_stmt db "Ошибка: ожидалось начало конструкции: Скажи или Пусть."
+msg_expected_stmt_len equ $ - msg_expected_stmt
+
+msg_expected_value db "Ошибка: ожидалось число, строка или имя переменной."
+msg_expected_value_len equ $ - msg_expected_value
+
+msg_unknown_var db "Ошибка: неизвестная переменная."
+msg_unknown_var_len equ $ - msg_unknown_var
+
+msg_expected_ident db "Ошибка: ожидалось имя переменной."
+msg_expected_ident_len equ $ - msg_expected_ident
+
+msg_expected_budet db "Ошибка: ожидалось слово Будет."
+msg_expected_budet_len equ $ - msg_expected_budet
+
+msg_expected_type db "Ошибка: ожидался тип: целым числом или строкой."
+msg_expected_type_len equ $ - msg_expected_type
+
+msg_expected_int_source db "Ошибка: ожидалась переменная целого типа."
+msg_expected_int_source_len equ $ - msg_expected_int_source
+
+msg_expected_str_source db "Ошибка: ожидалась строковая переменная."
+msg_expected_str_source_len equ $ - msg_expected_str_source
+
+msg_expected_dot db "Ошибка: ожидалась точка в конце конструкции."
+msg_expected_dot_len equ $ - msg_expected_dot
+
 section .bss
 var_count    resd 1
 var_type     resb MAXVARS
@@ -30,6 +67,8 @@ var_str_len  resd MAXVARS
 
 tmp_name_ptr resd 1
 tmp_name_len resd 1
+tmp_src_idx  resd 1
+parse_failed resd 1
 
 section .text
 
@@ -106,6 +145,8 @@ parse_say:
     je .str
     cmp dword [token_type], TOK_IDENT
     je .ident
+
+    FAIL msg_expected_value, msg_expected_value_len
     ret
 
 .num:
@@ -126,13 +167,19 @@ parse_say:
     mov edi, [token_len]
     call find_var
     cmp eax, -1
-    je .ret
+    je .unknown
 
     cmp byte [var_type + eax], 1
     je .print_int
     cmp byte [var_type + eax], 2
     je .print_str
-    jmp .ret
+
+    FAIL msg_unknown_var, msg_unknown_var_len
+    ret
+
+.unknown:
+    FAIL msg_unknown_var, msg_unknown_var_len
+    ret
 
 .print_int:
     push dword [var_int + eax*4]
@@ -149,14 +196,13 @@ parse_say:
     push eax
     call rt_print_string
     add esp, 8
-.ret:
     ret
 
 parse_pust:
     ; current token is TOK_PUST, read name
     call lex_next
     cmp dword [token_type], TOK_IDENT
-    jne .bad
+    jne .bad_ident
 
     mov eax, [token_value]
     mov [tmp_name_ptr], eax
@@ -165,7 +211,7 @@ parse_pust:
 
     call lex_next
     cmp dword [token_type], TOK_BUDET
-    jne .bad
+    jne .bad_budet
 
     call lex_next
 
@@ -173,6 +219,16 @@ parse_pust:
     je .int_decl
     cmp dword [token_type], TOK_TYPE_STR
     je .str_decl
+
+    FAIL msg_expected_type, msg_expected_type_len
+    ret
+
+.bad_ident:
+    FAIL msg_expected_ident, msg_expected_ident_len
+    ret
+
+.bad_budet:
+    FAIL msg_expected_budet, msg_expected_budet_len
     ret
 
 .int_decl:
@@ -181,6 +237,8 @@ parse_pust:
     je .store_int
     cmp dword [token_type], TOK_IDENT
     je .copy_int
+
+    FAIL msg_expected_value, msg_expected_value_len
     ret
 
 .store_int:
@@ -205,9 +263,9 @@ parse_pust:
     mov edi, [token_len]
     call find_var
     cmp eax, -1
-    je .bad
+    je .unknown_src_int
     cmp byte [var_type + eax], 1
-    jne .bad
+    jne .wrong_src_int
 
     mov edx, [var_int + eax*4]
     mov esi, [tmp_name_ptr]
@@ -225,12 +283,22 @@ parse_pust:
     mov [var_int + ebx*4], edx
     ret
 
+.unknown_src_int:
+    FAIL msg_unknown_var, msg_unknown_var_len
+    ret
+
+.wrong_src_int:
+    FAIL msg_expected_int_source, msg_expected_int_source_len
+    ret
+
 .str_decl:
     call lex_next
     cmp dword [token_type], TOK_STRING
     je .store_str
     cmp dword [token_type], TOK_IDENT
     je .copy_str
+
+    FAIL msg_expected_value, msg_expected_value_len
     ret
 
 .store_str:
@@ -268,9 +336,11 @@ parse_pust:
     mov edi, [token_len]
     call find_var
     cmp eax, -1
-    je .bad
+    je .unknown_src_str
     cmp byte [var_type + eax], 2
-    jne .bad
+    jne .wrong_src_str
+
+    mov [tmp_src_idx], eax
 
     mov edx, [var_str_len + eax*4]
     cmp edx, STR_SLOT_SIZE - 1
@@ -289,33 +359,41 @@ parse_pust:
     mov eax, [tmp_name_len]
     mov [var_name_len + ebx*4], eax
 
+    mov eax, [tmp_src_idx]
+    mov ecx, [var_str_len + eax*4]
+    imul eax, STR_SLOT_SIZE
+    lea esi, [var_str + eax]
+
     mov eax, ebx
     imul eax, STR_SLOT_SIZE
     lea edi, [var_str + eax]
 
-    mov ecx, [var_str_len + eax*0]  ; не трогаем, просто копию ниже
-    mov ecx, [var_str_len + eax*0]
-    ; легче так:
-    mov ecx, [var_str_len + eax*0]
+    rep movsb
+    mov byte [edi], 0
 
-    ; source slot
-    mov esi, eax
-    ; но eax уже сломан, поэтому делаем по-человечески:
-    mov eax, [token_value]
-    mov edx, [token_len]
-    ; eax/edx тут уже не нужны для строки, поэтому копируем ниже по источнику:
+    mov eax, [tmp_src_idx]
+    mov eax, [var_str_len + eax*4]
+    mov [var_str_len + ebx*4], eax
+    ret
 
-    mov eax, [token_value]
-    ; source variable index уже был в EAX от find_var, так что это место лучше не использовать для копии
-    ; проще: вынеси копию строки позже отдельной правкой, если будешь использовать копирование строк между переменными
+.unknown_src_str:
+    FAIL msg_unknown_var, msg_unknown_var_len
+    ret
 
+.wrong_src_str:
+    FAIL msg_expected_str_source, msg_expected_str_source_len
     ret
 
 .bad:
     ret
 
 parser_run:
+    mov dword [parse_failed], 0
+
 .loop:
+    cmp dword [parse_failed], 0
+    jne .done
+
     call lex_next
 
     cmp dword [token_type], TOK_EOF
@@ -327,21 +405,32 @@ parser_run:
     cmp dword [token_type], TOK_PUST
     je .do_pust
 
+    FAIL msg_expected_stmt, msg_expected_stmt_len
     jmp .done
 
 .do_say:
     call parse_say
+    cmp dword [parse_failed], 0
+    jne .done
+
     call lex_next
     cmp dword [token_type], TOK_DOT
-    jne .done
-    jmp .loop
+    je .loop
+
+    FAIL msg_expected_dot, msg_expected_dot_len
+    jmp .done
 
 .do_pust:
     call parse_pust
+    cmp dword [parse_failed], 0
+    jne .done
+
     call lex_next
     cmp dword [token_type], TOK_DOT
-    jne .done
-    jmp .loop
+    je .loop
+
+    FAIL msg_expected_dot, msg_expected_dot_len
 
 .done:
+    mov eax, [parse_failed]
     ret
