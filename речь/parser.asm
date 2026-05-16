@@ -4,19 +4,18 @@ extern lex_next, token_type, token_value, token_len
 extern token_start_line, token_start_col
 extern cur_line, cur_col
 extern cur_ptr, cur_peek, cur_next, cur_skip_ws
-extern rt_print_int, rt_print_string
+extern rt_print_number, rt_print_string
 extern rt_error_pos
 
 global parser_run
 
-%define TOK_INT    1
+%define TOK_NUMBER    1
 %define TOK_STRING    2
 %define TOK_SAY       3
 %define TOK_PUST      4
 %define TOK_BUDET     5
 %define TOK_TYPE_INT  6
 %define TOK_TYPE_STR  7
-%define TOK_TYPE_VAR  11
 %define TOK_IDENT     8
 %define TOK_DOT       9
 %define TOK_EOF       10
@@ -36,7 +35,7 @@ global parser_run
 %define SRC_STR_LIT 1
 %define SRC_VAR     2
 
-%define OP_SAY_INT   1
+%define OP_SAY_NUM   1
 %define OP_SAY_STR   2
 %define OP_SAY_VAR   3
 %define OP_ASSIGN    4
@@ -350,8 +349,8 @@ ensure_var_slot:
 parse_say:
     call lex_next
 
-    cmp dword [token_type], TOK_INT
-    je .int
+    cmp dword [token_type], TOK_NUMBER
+    je .num
     cmp dword [token_type], TOK_STRING
     je .str
     cmp dword [token_type], TOK_IDENT
@@ -360,9 +359,9 @@ parse_say:
     FAIL msg_expected_value, msg_expected_value_len
     ret
 
-.int:
+.num:
     mov eax, [instr_count]
-    mov dword [instr_opcode + eax*4], OP_SAY_INT
+    mov dword [instr_opcode + eax*4], OP_SAY_NUM
     mov ecx, [token_value]
     mov [instr_arg1 + eax*4], ecx
     mov edx, [stmt_line]
@@ -408,6 +407,12 @@ parse_say:
     FAIL msg_unknown_var, msg_unknown_var_len
     ret
 
+; ----------------------------------------------------------------------
+; parse_pust
+; grammar:
+;   пуст <name> будет <int|str> <value|ident>
+; For identifier sources, runtime type is copied from the source variable.
+; ----------------------------------------------------------------------
 parse_pust:
     call lex_next
     cmp dword [token_type], TOK_IDENT
@@ -427,16 +432,16 @@ parse_pust:
     je .want_int
     cmp dword [token_type], TOK_TYPE_STR
     je .want_str
-    cmp dword [token_type], TOK_TYPE_VAR
-    je .want_var
 
     FAIL msg_expected_type, msg_expected_type_len
     ret
 
 .want_int:
     call lex_next
-    cmp dword [token_type], TOK_INT
-    je .int_init
+    cmp dword [token_type], TOK_NUMBER
+    je .int_num_init
+    cmp dword [token_type], TOK_IDENT
+    je .var_init
 
     FAIL msg_expected_value, msg_expected_value_len
     ret
@@ -444,17 +449,11 @@ parse_pust:
 .want_str:
     call lex_next
     cmp dword [token_type], TOK_STRING
-    je .str_init
-
-    FAIL msg_expected_value, msg_expected_value_len
-    ret
-
-.want_var:
-    call lex_next
+    je .str_str_init
     cmp dword [token_type], TOK_IDENT
     je .var_init
 
-    FAIL msg_expected_ident, msg_expected_ident_len
+    FAIL msg_expected_value, msg_expected_value_len
     ret
 
 .bad_ident:
@@ -468,7 +467,7 @@ parse_pust:
 ; ----------------------------------------------------------------------
 ; integer literal assignment
 ; ----------------------------------------------------------------------
-.int_init:
+.int_num_init:
     call ensure_var_slot
     cmp eax, -1
     je .name_too_long_or_no_slot
@@ -491,7 +490,7 @@ parse_pust:
 ; ----------------------------------------------------------------------
 ; string literal assignment
 ; ----------------------------------------------------------------------
-.str_init:
+.str_str_init:
     call ensure_var_slot
     cmp eax, -1
     je .name_too_long_or_no_slot
@@ -563,8 +562,8 @@ execute_all:
     je .done
 
     mov eax, [instr_opcode + esi*4]
-    cmp eax, OP_SAY_INT
-    je .say_int
+    cmp eax, OP_SAY_NUM
+    je .say_num
     cmp eax, OP_SAY_STR
     je .say_str
     cmp eax, OP_SAY_VAR
@@ -573,11 +572,11 @@ execute_all:
     je .assign
     jmp .next
 
-.say_int:
+.say_num:
     mov eax, [instr_arg1 + esi*4]
     push esi
     push eax
-    call rt_print_int
+    call rt_print_number
     add esp, 4
     pop esi
     jmp .next
@@ -606,7 +605,7 @@ execute_all:
     mov eax, [var_int + eax*4]
     push esi
     push eax
-    call rt_print_int
+    call rt_print_number
     add esp, 4
     pop esi
     jmp .next

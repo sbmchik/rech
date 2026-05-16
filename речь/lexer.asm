@@ -5,14 +5,13 @@ extern cur_ptr, cur_peek, cur_next, cur_skip_ws, cur_line, cur_col
 global lex_next, token_type, token_value, token_len
 global token_start_line, token_start_col
 
-%define TOK_INT    1
+%define TOK_NUMBER    1
 %define TOK_STRING    2
 %define TOK_SAY       3
 %define TOK_PUST      4
 %define TOK_BUDET     5
 %define TOK_TYPE_INT  6
 %define TOK_TYPE_STR  7
-%define TOK_TYPE_VAR  11
 %define TOK_IDENT     8
 %define TOK_DOT       9
 %define TOK_EOF       10
@@ -27,14 +26,17 @@ kw_pust_len   equ $ - kw_pust
 kw_budet      db 0D0h,0B1h,0D1h,083h,0D0h,0B4h,0D0h,0B5h,0D1h,082h
 kw_budet_len  equ $ - kw_budet
 
-kw_int     db 0D1h,086h,0D0h,0B5h,0D0h,0BBh,0D1h,08Bh,0D0h,0BCh,20h,0D1h,087h,0D0h,0B8h,0D1h,081h,0D0h,0BBh,0D0h,0BEh,0D0h,0BCh
-kw_int_len equ $ - kw_int
+kw_int_ru     db 0D1h,086h,0D0h,0B5h,0D0h,0BBh,0D1h,08Bh,0D0h,0BCh,20h,0D1h,087h,0D0h,0B8h,0D1h,081h,0D0h,0BBh,0D0h,0BEh,0D0h,0BCh
+kw_int_ru_len equ $ - kw_int_ru
 
-kw_str     db 0D1h,081h,0D1h,082h,0D1h,080h,0D0h,0BEh,0D0h,0BAh,0D0h,0BEh,0D0h,0B9h
-kw_str_len equ $ - kw_str
+kw_str_ru     db 0D1h,081h,0D1h,082h,0D1h,080h,0D0h,0BEh,0D0h,0BAh,0D0h,0BEh,0D0h,0B9h
+kw_str_ru_len equ $ - kw_str_ru
 
-kw_var     db 0D0h,0BFh,0D0h,0B5h,0D1h,080h,0D0h,0B5h,0D0h,0BCh,0D0h,0B5h,0D0h,0BDh,0D0h,0BDh,0D0h,0BEh,0D0h,0B9h
-kw_var_len equ $ - kw_var
+kw_int_en     db "integer"
+kw_int_en_len equ $ - kw_int_en
+
+kw_str_en     db "str"
+kw_str_en_len equ $ - kw_str_en
 
 section .bss
 token_type       resd 1
@@ -42,8 +44,6 @@ token_value      resd 1
 token_len        resd 1
 token_start_line resd 1
 token_start_col  resd 1
-
-int_negative     resd 1
 
 section .text
 
@@ -137,13 +137,22 @@ lex_next:
     je .string
 
     cmp al, '-'
-    je .signed_int
+    je .number_or_ident
     cmp al, '0'
     jb .word
     cmp al, '9'
-    jbe .int
+    jbe .number
 
 .word:
+    ; сначала пробуем точные ключевые слова, включая многословное "целым числом"
+
+    lea esi, [kw_int_ru]
+    mov ecx, kw_int_ru_len
+    mov edx, TOK_TYPE_INT
+    call try_kw
+    test eax, eax
+    jnz .done
+
     lea esi, [kw_say]
     mov ecx, kw_say_len
     mov edx, TOK_SAY
@@ -165,23 +174,23 @@ lex_next:
     test eax, eax
     jnz .done
 
-    lea esi, [kw_int]
-    mov ecx, kw_int_len
-    mov edx, TOK_TYPE_INT
-    call try_kw
-    test eax, eax
-    jnz .done
-
-    lea esi, [kw_str]
-    mov ecx, kw_str_len
+    lea esi, [kw_str_ru]
+    mov ecx, kw_str_ru_len
     mov edx, TOK_TYPE_STR
     call try_kw
     test eax, eax
     jnz .done
 
-    lea esi, [kw_var]
-    mov ecx, kw_var_len
-    mov edx, TOK_TYPE_VAR
+    lea esi, [kw_int_en]
+    mov ecx, kw_int_en_len
+    mov edx, TOK_TYPE_INT
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_str_en]
+    mov ecx, kw_str_en_len
+    mov edx, TOK_TYPE_STR
     call try_kw
     test eax, eax
     jnz .done
@@ -217,35 +226,33 @@ lex_next:
     mov dword [token_type], TOK_IDENT
     jmp .done
 
-.signed_int:
+.number_or_ident:
     call cur_peek
     cmp al, '-'
-    jne .int
-
+    jne .number
+    ; минус считаем частью числа только если дальше цифра
     call cur_next
     call cur_peek
     cmp al, '0'
     jb .fail
     cmp al, '9'
     ja .fail
+    ; откат не делаем, просто идём в number
+    jmp .number
 
-    mov dword [int_negative], 1
-    jmp .int
-
-.int:
-    mov dword [int_negative], 0
+.number:
     xor ecx, ecx
     xor edx, edx
 
     mov eax, [cur_ptr]
     mov [token_value], eax
 
-.int_loop:
+.num_loop:
     call cur_peek
     cmp al, '0'
-    jb .int_done
+    jb .num_done
     cmp al, '9'
-    ja .int_done
+    ja .num_done
 
     imul edx, edx, 10
     movzx eax, al
@@ -254,20 +261,15 @@ lex_next:
 
     call cur_next
     inc ecx
-    jmp .int_loop
+    jmp .num_loop
 
-.int_done:
+.num_done:
     test ecx, ecx
     jz .fail
 
     mov [token_len], ecx
     mov [token_value], edx
-
-    cmp dword [int_negative], 0
-    je .int_not_negr
-    neg dword [token_value]
-.int_not_negr:
-    mov dword [token_type], TOK_INT
+    mov dword [token_type], TOK_NUMBER
     jmp .done
 
 .string:

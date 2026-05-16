@@ -7,7 +7,7 @@ extern _WriteFile@20
 extern _MultiByteToWideChar@24
 
 global rt_init
-global rt_print_int
+global rt_print_number
 global rt_print_string
 global rt_error_string
 global rt_error_pos
@@ -36,7 +36,7 @@ out_console resd 1
 err_console resd 1
 tmp_mode    resd 1
 written     resd 1
-int_buf     resb 32
+num_buf     resb 32
 wide_buf    resw 1024
 
 section .text
@@ -160,7 +160,7 @@ rt_write_uint_stderr:
     mov ebp, esp
 
     mov eax, [ebp+8]
-    lea edi, [int_buf+31]
+    lea edi, [num_buf+31]
     mov byte [edi], 0
     mov ebx, 10
 
@@ -182,7 +182,7 @@ rt_write_uint_stderr:
     jnz .loop
 
 .out_ready:
-    lea ecx, [int_buf+31]
+    lea ecx, [num_buf+31]
     sub ecx, edi
 
     push dword 0
@@ -196,7 +196,7 @@ rt_write_uint_stderr:
     pop ebp
     ret
 
-rt_print_int:
+rt_print_number:
     push ebp
     mov ebp, esp
 
@@ -206,7 +206,7 @@ rt_print_int:
     xor eax, esi
     sub eax, esi
 
-    lea edi, [int_buf+31]
+    lea edi, [num_buf+31]
     mov byte [edi], 0
     mov ebx, 10
 
@@ -234,7 +234,7 @@ rt_print_int:
     mov byte [edi], '-'
 
 .out_ready:
-    lea ecx, [int_buf+31]
+    lea ecx, [num_buf+31]
     sub ecx, edi
 
     push dword 1
