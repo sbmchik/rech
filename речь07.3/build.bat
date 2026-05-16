@@ -15,3 +15,4 @@ echo Linking...
 gcc -m32 -o main.exe main.obj cursor.obj lexer.obj parser.obj runtime.obj tokens.obj -lkernel32
 
 echo Done.
+pause

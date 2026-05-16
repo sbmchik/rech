@@ -153,22 +153,15 @@ find_var:
     pop ebx
     ret
 
-ensure_var_slot:
-    ; ESI = name ptr
-    ; EDI = name len
-    call find_var
-    cmp eax, -1
-    jne .done
-
+; Allocate a new variable slot (without filling name/type)
+; Returns index in eax, or -1 if full
+alloc_var_slot:
     mov eax, [var_count]
     cmp eax, MAXVARS
-    jae .too_many
-
+    jae .full
     inc dword [var_count]
-.done:
     ret
-
-.too_many:
+.full:
     mov eax, -1
     ret
 
@@ -261,18 +254,26 @@ parse_pust:
     ret
 
 .int_num_init:
-    ; register new variable (check for redeclaration)
+    ; check redeclaration
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    call ensure_var_slot
+    ; allocate slot
+    call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
+
+    ; fill name and type
+    mov eax, [tmp_name_ptr]
+    mov [var_name_ptr + ebx*4], eax
+    mov eax, [tmp_name_len]
+    mov [var_name_len + ebx*4], eax
     mov byte [var_type + ebx], 1          ; int
+
     ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_INT_NUM
@@ -292,18 +293,26 @@ parse_pust:
     jne .wrong_src_int
     mov edx, eax                     ; source index
 
-    ; register new variable (check redeclaration)
+    ; check redeclaration of target
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    call ensure_var_slot
+    ; allocate slot
+    call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
+
+    ; fill name and type
+    mov eax, [tmp_name_ptr]
+    mov [var_name_ptr + ebx*4], eax
+    mov eax, [tmp_name_len]
+    mov [var_name_len + ebx*4], eax
     mov byte [var_type + ebx], 1
+
     ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_INT_VAR
@@ -331,17 +340,27 @@ parse_pust:
     ret
 
 .str_str_init:
+    ; check redeclaration
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    call ensure_var_slot
+    ; allocate slot
+    call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
+
+    ; fill name and type
+    mov eax, [tmp_name_ptr]
+    mov [var_name_ptr + ebx*4], eax
+    mov eax, [tmp_name_len]
+    mov [var_name_len + ebx*4], eax
     mov byte [var_type + ebx], 2          ; str
+
+    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_STR_STR
     mov [instr_arg1 + eax*4], ebx
@@ -362,17 +381,27 @@ parse_pust:
     jne .wrong_src_str
     mov edx, eax
 
+    ; check redeclaration of target
     mov esi, [tmp_name_ptr]
     mov edi, [tmp_name_len]
     call find_var
     cmp eax, -1
     jne .redeclared
 
-    call ensure_var_slot
+    ; allocate slot
+    call alloc_var_slot
     cmp eax, -1
     je .bad
     mov ebx, eax
+
+    ; fill name and type
+    mov eax, [tmp_name_ptr]
+    mov [var_name_ptr + ebx*4], eax
+    mov eax, [tmp_name_len]
+    mov [var_name_len + ebx*4], eax
     mov byte [var_type + ebx], 2
+
+    ; store instruction
     mov eax, [instr_count]
     mov dword [instr_opcode + eax*4], OP_PUST_STR_VAR
     mov [instr_arg1 + eax*4], ebx
