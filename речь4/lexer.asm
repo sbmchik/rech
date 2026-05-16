@@ -1,29 +1,112 @@
 BITS 32
 
-extern cur_ptr, endptr
-extern cur_peek, cur_next, cur_skip_ws
-extern line_no, col_no
+extern cur_ptr, cur_peek, cur_next, cur_skip_ws
 
-global lex_next
-global token_type, token_value, token_len
+global lex_next, token_type, token_value, token_len
 
-%define TOK_BAD     0
-%define TOK_NUMBER  1
-%define TOK_STRING  2
-%define TOK_SAY     3
-%define TOK_DOT     4
-%define TOK_EOF     5
+%define TOK_NUMBER    1
+%define TOK_STRING    2
+%define TOK_SAY       3
+%define TOK_PUST      4
+%define TOK_BUDET     5
+%define TOK_TYPE_INT  6
+%define TOK_TYPE_STR  7
+%define TOK_IDENT     8
+%define TOK_DOT       9
+%define TOK_EOF       10
+
+section .data
+kw_say        db 0D0h,0A1h,0D0h,0BAh,0D0h,0B0h,0D0h,0B6h,0D0h,0B8h
+kw_say_len    equ $ - kw_say
+
+kw_pust       db 0D0h,09Fh,0D1h,083h,0D1h,081h,0D1h,082h,0D1h,08Ch
+kw_pust_len   equ $ - kw_pust
+
+kw_budet      db 0D0h,0B1h,0D1h,083h,0D0h,0B4h,0D0h,0B5h,0D1h,082h
+kw_budet_len  equ $ - kw_budet
+
+kw_int_ru     db 0D1h,086h,0D0h,0B5h,0D0h,0BBh,0D1h,08Bh,0D0h,0BCh,20h,0D1h,087h,0D0h,0B8h,0D1h,081h,0D0h,0BBh,0D0h,0BEh,0D0h,0BCh
+kw_int_ru_len equ $ - kw_int_ru
+
+kw_str_ru     db 0D1h,081h,0D1h,082h,0D1h,080h,0D0h,0BEh,0D0h,0BAh,0D0h,0BEh,0D0h,0B9h
+kw_str_ru_len equ $ - kw_str_ru
+
+kw_int_en     db "integer"
+kw_int_en_len equ $ - kw_int_en
+
+kw_str_en     db "str"
+kw_str_en_len equ $ - kw_str_en
 
 section .bss
 token_type  resd 1
 token_value resd 1
 token_len   resd 1
 
-section .data
-kw_say db 0D0h,0A1h,0D0h,0BAh,0D0h,0B0h,0D0h,0B6h,0D0h,0B8h
-kw_say_len equ $ - kw_say
-
 section .text
+
+; ESI = pattern ptr
+; ECX = pattern len
+; EDX = token type
+try_kw:
+    push ebx
+    push edi
+
+    mov ebx, [cur_ptr]
+    xor edi, edi
+
+.cmp_loop:
+    cmp edi, ecx
+    je .boundary
+
+    mov al, [ebx + edi]
+    cmp al, [esi + edi]
+    jne .fail
+
+    inc edi
+    jmp .cmp_loop
+
+.boundary:
+    mov eax, [cur_ptr]
+    add eax, ecx
+    mov al, [eax]
+
+    cmp al, 0
+    je .advance
+    cmp al, ' '
+    je .advance
+    cmp al, 9
+    je .advance
+    cmp al, 10
+    je .advance
+    cmp al, 13
+    je .advance
+    cmp al, '.'
+    je .advance
+    cmp al, '"'
+    je .advance
+    jmp .fail
+
+.advance:
+    mov edi, ecx
+.step:
+    test edi, edi
+    jz .ok
+    call cur_next
+    dec edi
+    jmp .step
+
+.ok:
+    mov [token_type], edx
+    mov eax, 1
+    jmp .done
+
+.fail:
+    xor eax, eax
+
+.done:
+    pop edi
+    pop ebx
+    ret
 
 lex_next:
     call cur_skip_ws
@@ -39,98 +122,115 @@ lex_next:
     je .string
 
     cmp al, '-'
-    je .maybe_number
-
+    je .number_or_ident
     cmp al, '0'
-    jb .try_say
+    jb .word
     cmp al, '9'
     jbe .number
 
-.try_say:
+.word:
+    ; сначала пробуем точные ключевые слова, включая многословное "целым числом"
+
+    lea esi, [kw_int_ru]
+    mov ecx, kw_int_ru_len
+    mov edx, TOK_TYPE_INT
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_say]
+    mov ecx, kw_say_len
+    mov edx, TOK_SAY
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_pust]
+    mov ecx, kw_pust_len
+    mov edx, TOK_PUST
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_budet]
+    mov ecx, kw_budet_len
+    mov edx, TOK_BUDET
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_str_ru]
+    mov ecx, kw_str_ru_len
+    mov edx, TOK_TYPE_STR
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_int_en]
+    mov ecx, kw_int_en_len
+    mov edx, TOK_TYPE_INT
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    lea esi, [kw_str_en]
+    mov ecx, kw_str_en_len
+    mov edx, TOK_TYPE_STR
+    call try_kw
+    test eax, eax
+    jnz .done
+
+    ; обычный идентификатор
     mov eax, [cur_ptr]
-    mov edx, [endptr]
-    sub edx, eax
-    cmp edx, kw_say_len
-    jb .fail
+    mov [token_value], eax
 
-    cmp byte [eax],   0D0h
-    jne .fail
-    cmp byte [eax+1], 0A1h
-    jne .fail
-    cmp byte [eax+2], 0D0h
-    jne .fail
-    cmp byte [eax+3], 0BAh
-    jne .fail
-    cmp byte [eax+4], 0D0h
-    jne .fail
-    cmp byte [eax+5], 0B0h
-    jne .fail
-    cmp byte [eax+6], 0D0h
-    jne .fail
-    cmp byte [eax+7], 0B6h
-    jne .fail
-    cmp byte [eax+8], 0D0h
-    jne .fail
-    cmp byte [eax+9], 0B8h
-    jne .fail
-
-    mov edx, [cur_ptr]
-    add edx, kw_say_len
-    cmp edx, [endptr]
-    je .say_ok
-
-    mov al, [edx]
-    cmp al, ' '
-    je .say_ok
-    cmp al, 9
-    je .say_ok
-    cmp al, 10
-    je .say_ok
-    cmp al, 13
-    je .say_ok
-    cmp al, '.'
-    je .say_ok
-    cmp al, '"'
-    je .say_ok
+    xor ecx, ecx
+.id_loop:
+    call cur_peek
     cmp al, 0
-    je .say_ok
-    jmp .fail
+    je .id_done
+    cmp al, ' '
+    je .id_done
+    cmp al, 9
+    je .id_done
+    cmp al, 10
+    je .id_done
+    cmp al, 13
+    je .id_done
+    cmp al, '.'
+    je .id_done
+    cmp al, '"'
+    je .id_done
 
-.say_ok:
-    mov dword [token_type], TOK_SAY
-    mov dword [token_value], 0
-    mov dword [token_len], kw_say_len
-
-    add dword [cur_ptr], kw_say_len
-    add dword [col_no], kw_say_len
-    ret
-
-.maybe_number:
-    mov eax, [cur_ptr]
-    mov edx, [endptr]
-    cmp eax, edx
-    jae .fail
-
-    mov bl, [eax]
-    cmp bl, '-'
-    jne .fail
-
-    mov ecx, 1
     call cur_next
+    inc ecx
+    jmp .id_loop
 
+.id_done:
+    mov [token_len], ecx
+    mov dword [token_type], TOK_IDENT
+    jmp .done
+
+.number_or_ident:
+    call cur_peek
+    cmp al, '-'
+    jne .number
+    ; минус считаем частью числа только если дальше цифра
+    call cur_next
     call cur_peek
     cmp al, '0'
     jb .fail
     cmp al, '9'
     ja .fail
-    jmp .number_body
+    ; откат не делаем, просто идём в number
+    jmp .number
 
 .number:
     xor ecx, ecx
+    xor edx, edx
 
-.number_body:
-    xor ebx, ebx
-    xor esi, esi
+    mov eax, [cur_ptr]
+    mov [token_value], eax
 
 .num_loop:
     call cur_peek
@@ -139,66 +239,62 @@ lex_next:
     cmp al, '9'
     ja .num_done
 
-    imul ebx, ebx, 10
+    imul edx, edx, 10
     movzx eax, al
     sub eax, '0'
-    add ebx, eax
-    inc esi
+    add edx, eax
 
     call cur_next
+    inc ecx
     jmp .num_loop
 
 .num_done:
-    cmp esi, 0
-    je .fail
+    test ecx, ecx
+    jz .fail
 
-    cmp ecx, 0
-    je .store_num
-    neg ebx
-
-.store_num:
+    mov [token_len], ecx
+    mov [token_value], edx
     mov dword [token_type], TOK_NUMBER
-    mov [token_value], ebx
-    mov [token_len], esi
-    ret
+    jmp .done
 
 .string:
     call cur_next
     mov eax, [cur_ptr]
     mov [token_value], eax
 
+    xor ecx, ecx
 .str_loop:
     call cur_peek
     cmp al, 0
     je .fail
+    cmp al, '"'
+    je .str_done
     cmp al, 10
     je .fail
     cmp al, 13
     je .fail
-    cmp al, '"'
-    je .str_done
 
     call cur_next
+    inc ecx
     jmp .str_loop
 
 .str_done:
-    mov eax, [cur_ptr]
-    sub eax, [token_value]
-    mov [token_len], eax
+    mov [token_len], ecx
     call cur_next
-
     mov dword [token_type], TOK_STRING
-    ret
+    jmp .done
 
 .dot:
     call cur_next
     mov dword [token_type], TOK_DOT
-    ret
+    jmp .done
 
 .eof:
     mov dword [token_type], TOK_EOF
-    ret
+    jmp .done
 
 .fail:
-    mov dword [token_type], TOK_BAD
+    mov dword [token_type], TOK_EOF
+
+.done:
     ret
