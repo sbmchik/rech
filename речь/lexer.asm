@@ -570,9 +570,9 @@ lex_next:
     je .unterminated
 
     ; ASCII escapes
-    cmp al, 92          ; \
+    cmp al, 92
     je .esc_backslash
-    cmp al, 34          ; "
+    cmp al, 34
     je .esc_quote
 
     ; UTF-8 aliases for Cyrillic letters
@@ -584,26 +584,24 @@ lex_next:
 
 .alias_d0:
     mov ebx, [cur_ptr]
-    cmp byte [ebx+1], 189    ; н
+    cmp byte [ebx+1], 189 ; н
     je .esc_n
-    cmp byte [ebx+1], 186    ; к
+    cmp byte [ebx+1], 186 ; к
     je .esc_k
-    cmp byte [ebx+1], 178    ; в
+    cmp byte [ebx+1], 178 ; в
     je .esc_v
-    cmp byte [ebx+1], 183    ; з
+    cmp byte [ebx+1], 183 ; з
     je .esc_z
-    cmp byte [ebx+1], 191    ; п
+    cmp byte [ebx+1], 191 ; п
     je .esc_p
     jmp .bad_escape
 
 .alias_d1:
     mov ebx, [cur_ptr]
-    cmp byte [ebx+1], 130    ; т
+    cmp byte [ebx+1], 130 ; т
     je .esc_t
-    cmp byte [ebx+1], 129    ; с
+    cmp byte [ebx+1], 129 ; с
     je .esc_s
-    cmp byte [ebx+1], 141    ; э
-    je .esc_e
     jmp .bad_escape
 
 .esc_n:
@@ -647,13 +645,7 @@ lex_next:
     call cur_next
     mov eax, 12
     jmp .emit_cp
-
-.esc_e:
-    call cur_next
-    call cur_next
-    mov eax, 92
-    jmp .emit_cp
-
+    
 .esc_backslash:
     call cur_next
     mov eax, 92
