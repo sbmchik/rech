@@ -1,7 +1,7 @@
 
 BITS 32
 
-extern lex_next, token_type, token_value, token_len, token_overflow
+extern lex_next, token_type, token_value, token_len, token_overflow, token_error_kind, decoded_str_pos
 extern token_start_line, token_start_col
 extern cur_line, cur_col
 extern cur_ptr, cur_peek, cur_next, cur_skip_ws
@@ -23,10 +23,10 @@ global parse_failed
 %define TOK_EOF     10
 %define TOK_TYPE_VAR 11
 
-%define MAXVARS 64
-%define STR_SLOT_SIZE 512
-%define MAX_INSTRUCTIONS 4096
-%define VAR_NAME_MAX 128
+%define MAXVARS 256
+%define STR_SLOT_SIZE 2048
+%define MAX_INSTRUCTIONS 16384
+%define VAR_NAME_MAX 256
 
 ; runtime types
 %define VT_EMPTY 0
@@ -103,6 +103,15 @@ msg_expected_value_len equ $ - msg_expected_value
 msg_int_too_big db "целое число вне диапазона."
 msg_int_too_big_len equ $ - msg_int_too_big
 
+msg_bad_escape db "неверная экранирующая последовательность."
+msg_bad_escape_len equ $ - msg_bad_escape
+
+msg_string_too_long db "строковый литерал слишком длинный."
+msg_string_too_long_len equ $ - msg_string_too_long
+
+msg_unterminated_string db "не закрыта строка."
+msg_unterminated_string_len equ $ - msg_unterminated_string
+
 msg_unknown_var db "неизвестная переменная."
 msg_unknown_var_len equ $ - msg_unknown_var
 
@@ -145,6 +154,46 @@ instructions resb MAX_INSTRUCTIONS * Instruction_size
 instr_count  resd 1
 
 section .text
+
+; ----------------------------------------------------------------------
+; check_lex_errors
+; turns lexer status into parser error messages
+; ----------------------------------------------------------------------
+check_lex_errors:
+    cmp dword [token_overflow], 0
+    jne .int_overflow
+
+    mov eax, [token_error_kind]
+    cmp eax, 0
+    je .ok
+    cmp eax, 1
+    je .int_overflow
+    cmp eax, 2
+    je .bad_escape
+    cmp eax, 3
+    je .string_too_long
+    cmp eax, 4
+    je .unterminated_string
+    jmp .ok
+
+.int_overflow:
+    FAIL msg_int_too_big, msg_int_too_big_len
+    ret
+
+.bad_escape:
+    FAIL msg_bad_escape, msg_bad_escape_len
+    ret
+
+.string_too_long:
+    FAIL msg_string_too_long, msg_string_too_long_len
+    ret
+
+.unterminated_string:
+    FAIL msg_unterminated_string, msg_unterminated_string_len
+    ret
+
+.ok:
+    ret
 
 ; ----------------------------------------------------------------------
 ; find_var
@@ -237,6 +286,7 @@ store_var_name:
     mov eax, edi
 
     push ecx
+    cld
     rep movsb
     mov byte [edi], 0
     pop ecx
@@ -291,11 +341,9 @@ ensure_var_slot:
 ; ----------------------------------------------------------------------
 parse_say:
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
 
     cmp dword [token_type], TOK_INT
     je .int
@@ -361,16 +409,17 @@ parse_say:
     FAIL msg_unknown_var, msg_unknown_var_len
     ret
 
+.ret:
+    ret
+
 ; ----------------------------------------------------------------------
 ; parse_pust
 ; ----------------------------------------------------------------------
 parse_pust:
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok1
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok1:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_IDENT
     jne .bad_ident
 
@@ -380,20 +429,16 @@ parse_pust:
     mov [tmp_name_len], eax
 
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok2
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok2:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_BUDET
     jne .bad_budet
 
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok3
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok3:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_TYPE_INT
     je .want_int
     cmp dword [token_type], TOK_TYPE_STR
@@ -406,11 +451,9 @@ parse_pust:
 
 .want_int:
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok4
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok4:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_INT
     je .int_init
 
@@ -419,11 +462,9 @@ parse_pust:
 
 .want_str:
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok5
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok5:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_STRING
     je .str_init
 
@@ -432,11 +473,9 @@ parse_pust:
 
 .want_var:
     call lex_next
-    cmp dword [token_overflow], 0
-    je .lex_ok6
-    FAIL msg_int_too_big, msg_int_too_big_len
-    ret
-.lex_ok6:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .ret
     cmp dword [token_type], TOK_IDENT
     je .var_init
 
@@ -540,6 +579,9 @@ parse_pust:
 
 .name_too_long_or_no_slot:
     FAIL msg_name_too_long, msg_name_too_long_len
+    ret
+
+.ret:
     ret
 
 ; ----------------------------------------------------------------------
@@ -664,6 +706,7 @@ execute_all:
     imul eax, eax, STR_SLOT_SIZE
     lea edi, [var_str + eax]
     mov ecx, [esp + 4]                  ; len
+    cld
     rep movsb
     mov byte [edi], 0
 
@@ -705,7 +748,8 @@ execute_all:
     jbe .len_ok_sv
     mov edx, STR_SLOT_SIZE - 1
 .len_ok_sv:
-    push ecx
+    mov eax, [ebx + Instruction.arg1]   ; dest slot
+    push eax
     push edx
     push esi
 
@@ -713,19 +757,19 @@ execute_all:
     imul esi, esi, STR_SLOT_SIZE
     lea esi, [var_str + esi]
 
-    mov eax, [ebx + Instruction.arg1]   ; dest slot
+    mov eax, [esp + 8]                  ; dest slot
     imul eax, eax, STR_SLOT_SIZE
     lea edi, [var_str + eax]
 
     mov ecx, [esp + 4]
+    cld
     rep movsb
     mov byte [edi], 0
 
     pop esi
     pop edx
-    pop ecx
+    pop eax
 
-    mov eax, ecx
     imul eax, eax, Variable_size
     mov byte [vars + eax + Variable.type], VT_STR
     mov [vars + eax + Variable.str_len], edx
@@ -749,11 +793,9 @@ parse_all:
     jne .done
 
     call lex_next
-    cmp dword [token_overflow], 0
-    je .no_overflow_top
-    FAIL msg_int_too_big, msg_int_too_big_len
-    jmp .done
-.no_overflow_top:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .done
     cmp dword [token_type], TOK_EOF
     je .done
 
@@ -781,11 +823,9 @@ parse_all:
     mov [err_col], eax
 
     call lex_next
-    cmp dword [token_overflow], 0
-    je .no_overflow_dot1
-    FAIL msg_int_too_big, msg_int_too_big_len
-    jmp .done
-.no_overflow_dot1:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .done
     cmp dword [token_type], TOK_DOT
     je .loop
 
@@ -803,11 +843,9 @@ parse_all:
     mov [err_col], eax
 
     call lex_next
-    cmp dword [token_overflow], 0
-    je .no_overflow_dot2
-    FAIL msg_int_too_big, msg_int_too_big_len
-    jmp .done
-.no_overflow_dot2:
+    call check_lex_errors
+    cmp dword [parse_failed], 0
+    jne .done
     cmp dword [token_type], TOK_DOT
     je .loop
 
@@ -823,6 +861,9 @@ parser_run:
     mov dword [parse_failed], 0
     mov dword [instr_count], 0
     mov dword [var_count], 0
+    mov dword [decoded_str_pos], 0
+
+    cld
 
     ; clear symbol/runtime tables for a clean run
     xor eax, eax

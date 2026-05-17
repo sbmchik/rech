@@ -38,7 +38,7 @@ err_console resd 1
 tmp_mode    resd 1
 written     resd 1
 int_buf     resb 32
-wide_buf    resw 1024
+wide_buf    resw 8192
 
 section .text
 
@@ -84,15 +84,15 @@ write_utf8:
     mov ecx, [ebp+20]    ; len
     mov edx, [ebp+24]    ; add_newline
 
-    cmp ecx, 1024
+    cmp ecx, 8192
     jbe .len_ok
-    mov ecx, 1024
+    mov ecx, 8192
 .len_ok:
 
     test ebx, ebx
     jz .raw
 
-    push dword 1024
+    push dword 8192
     push wide_buf
     push ecx
     push esi
@@ -238,7 +238,7 @@ rt_print_int:
     lea ecx, [int_buf+31]
     sub ecx, edi
 
-    push dword 1
+    push dword 0
     push ecx
     push edi
     push dword [out_console]
@@ -253,7 +253,7 @@ rt_print_string:
     push ebp
     mov ebp, esp
 
-    push dword 1
+    push dword 0
     push dword [ebp+12]
     push dword [ebp+8]
     push dword [out_console]
