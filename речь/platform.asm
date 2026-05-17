@@ -9,10 +9,14 @@ extern _SetConsoleOutputCP@4
 extern _GetLastError@0
 extern _GetProcessHeap@0
 extern _HeapAlloc@12
+extern _HeapReAlloc@16
 extern _HeapFree@12
 extern _GetFileSize@8
 
 global platform_init
+global platform_alloc
+global platform_realloc
+global platform_free
 global platform_read_file
 global platform_free_buffer
 global platform_last_error
@@ -25,7 +29,6 @@ global platform_last_stage
 %define OPEN_EXISTING         3
 %define FILE_ATTRIBUTE_NORMAL  80h
 %define CP_UTF8               65001
-%define HEAP_ZERO_MEMORY      8
 
 section .bss
 platform_last_error resd 1
@@ -45,8 +48,65 @@ platform_init:
     ret
 
 ; cdecl:
-;   platform_free_buffer(ptr)
-platform_free_buffer:
+;   platform_alloc(bytes)
+; returns:
+;   EAX = pointer or 0
+platform_alloc:
+    push ebp
+    mov ebp, esp
+    push ebx
+
+    call _GetProcessHeap@0
+    test eax, eax
+    jz .fail
+
+    push dword [ebp+8]
+    push dword 0
+    push eax
+    call _HeapAlloc@12
+    jmp .done
+
+.fail:
+    xor eax, eax
+
+.done:
+    pop ebx
+    mov esp, ebp
+    pop ebp
+    ret
+
+; cdecl:
+;   platform_realloc(ptr, bytes)
+; returns:
+;   EAX = pointer or 0
+platform_realloc:
+    push ebp
+    mov ebp, esp
+    push ebx
+
+    call _GetProcessHeap@0
+    test eax, eax
+    jz .fail
+
+    push dword [ebp+12]    ; bytes
+    push dword [ebp+8]     ; ptr
+    push dword 0
+    push eax
+    call _HeapReAlloc@16
+    jmp .done
+
+.fail:
+    xor eax, eax
+
+.done:
+    pop ebx
+    mov esp, ebp
+    pop ebp
+    ret
+
+; cdecl:
+;   platform_free(ptr)
+platform_free:
     push ebp
     mov ebp, esp
     push ebx
@@ -69,6 +129,11 @@ platform_free_buffer:
     mov esp, ebp
     pop ebp
     ret
+
+; cdecl:
+;   platform_free_buffer(ptr)
+platform_free_buffer:
+    jmp platform_free
 
 ; cdecl:
 ;   platform_read_file(path_wptr)
@@ -202,5 +267,3 @@ platform_read_file:
     mov esp, ebp
     pop ebp
     ret
-
-

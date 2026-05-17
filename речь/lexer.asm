@@ -1,10 +1,13 @@
+
+
 BITS 32
 
 extern cur_ptr, cur_peek, cur_next, cur_skip_ws, cur_line, cur_col
+extern platform_alloc, platform_realloc
 
 global lex_next, token_type, token_value, token_len
 global token_start_line, token_start_col
-global token_overflow, token_error_kind, decoded_str_pos
+global token_overflow, token_error_kind
 global try_kw
 
 %define TOK_INT       1
@@ -23,8 +26,6 @@ global try_kw
 %define INT32_MAX_MOD10 7
 %define INT32_MIN_ABS_DIV10 214748364
 %define INT32_MIN_ABS_MOD10 8
-
-%define MAX_STRING_ARENA 1048576
 
 section .data
 kw_say        db 208,161,208,186,208,176,208,182,208,184
@@ -45,6 +46,7 @@ kw_str_len equ $ - kw_str
 kw_var     db 208,191,208,181,209,128,208,181,208,188,208,181,208,189,208,189,208,190,208,185
 kw_var_len equ $ - kw_var
 
+
 section .bss
 token_type       resd 1
 token_value      resd 1
@@ -54,11 +56,11 @@ token_start_col  resd 1
 token_overflow   resd 1
 token_error_kind resd 1
 
-decoded_str_pos   resd 1
-string_start_pos  resd 1
-decoded_str_buf   resb MAX_STRING_ARENA
+string_buf_ptr   resd 1
+string_buf_len   resd 1
+string_buf_cap   resd 1
 
-int_negative      resd 1
+int_negative     resd 1
 
 section .text
 
@@ -162,28 +164,100 @@ hex_digit_value:
     mov eax, -1
     ret
 
-append_raw_byte:
+
+; ----------------------------------------------------------------------
+; string builder helpers
+; ----------------------------------------------------------------------
+string_ensure_capacity:
+    push ebx
+    push ecx
     push edx
-    mov edx, [decoded_str_pos]
-    cmp edx, MAX_STRING_ARENA
-    jae .too_long
-    mov [decoded_str_buf + edx], al
-    inc edx
-    mov [decoded_str_pos], edx
+
+    mov edx, [string_buf_cap]
+    cmp edx, eax
+    jae .ok
+
+    mov ecx, edx
+    test ecx, ecx
+    jnz .grow
+    mov ecx, 64
+    jmp .alloc
+
+.grow:
+    shl ecx, 1
+    cmp ecx, eax
+    jb .grow
+
+.alloc:
+    mov edx, [string_buf_ptr]
+    test edx, edx
+    jz .fresh
+
+    mov ebx, ecx
+    push ebx
+    push edx
+    call platform_realloc
+    add esp, 8
+    test eax, eax
+    jz .oom
+    mov [string_buf_ptr], eax
+    mov [string_buf_cap], ebx
     xor eax, eax
     jmp .done
-.too_long:
-    mov dword [token_error_kind], 3
+
+.fresh:
+    mov ebx, ecx
+    push ebx
+    call platform_alloc
+    add esp, 4
+    test eax, eax
+    jz .oom
+    mov [string_buf_ptr], eax
+    mov [string_buf_cap], ebx
+    xor eax, eax
+    jmp .done
+
+.ok:
+    xor eax, eax
+    jmp .done
+
+.oom:
+    mov dword [token_error_kind], 5
     mov eax, -1
+
 .done:
     pop edx
+    pop ecx
+    pop ebx
+    ret
+
+append_raw_byte:
+    push ebx
+    mov bl, al
+
+    mov edx, [string_buf_len]
+    lea eax, [edx + 2]           ; byte + terminator
+    call string_ensure_capacity
+    cmp eax, 0
+    jne .fail
+
+    mov eax, [string_buf_ptr]
+    mov [eax + edx], bl
+    inc edx
+    mov byte [eax + edx], 0
+    mov [string_buf_len], edx
+    xor eax, eax
+    pop ebx
+    ret
+
+.fail:
+    pop ebx
     ret
 
 append_utf8_cp:
     push ebx
     push ecx
     push edx
-    push edi
 
     mov ebx, eax
 
@@ -201,97 +275,112 @@ append_utf8_cp:
     cmp ebx, 0xFFFF
     jbe .three
     mov ecx, 4
-    jmp .check
+    jmp .encode
 .one:
     mov ecx, 1
-    jmp .check
+    jmp .encode
 .two:
     mov ecx, 2
-    jmp .check
+    jmp .encode
 .three:
     mov ecx, 3
-.check:
-    mov edx, [decoded_str_pos]
-    mov eax, edx
-    add eax, ecx
-    cmp eax, MAX_STRING_ARENA
-    ja .too_long
 
-    lea edi, [decoded_str_buf + edx]
-
+.encode:
     cmp ecx, 1
     je .enc1
     cmp ecx, 2
     je .enc2
     cmp ecx, 3
     je .enc3
+    jmp .enc4
 
-.enc4:
-    mov eax, ebx
-    shr eax, 18
-    or al, 0F0h
-    mov [edi], al
-
-    mov eax, ebx
-    shr eax, 12
-    and al, 3Fh
-    or al, 80h
-    mov [edi+1], al
-
-    mov eax, ebx
-    shr eax, 6
-    and al, 3Fh
-    or al, 80h
-    mov [edi+2], al
-
-    mov eax, ebx
-    and al, 3Fh
-    or al, 80h
-    mov [edi+3], al
-    jmp .store
-
-.enc3:
-    mov eax, ebx
-    shr eax, 12
-    or al, 0E0h
-    mov [edi], al
-
-    mov eax, ebx
-    shr eax, 6
-    and al, 3Fh
-    or al, 80h
-    mov [edi+1], al
-
-    mov eax, ebx
-    and al, 3Fh
-    or al, 80h
-    mov [edi+2], al
-    jmp .store
+.enc1:
+    mov al, bl
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+    xor eax, eax
+    jmp .done
 
 .enc2:
     mov eax, ebx
     shr eax, 6
     or al, 0C0h
-    mov [edi], al
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
 
     mov eax, ebx
     and al, 3Fh
     or al, 80h
-    mov [edi+1], al
-    jmp .store
-
-.enc1:
-    mov [edi], bl
-
-.store:
-    mov eax, edx
-    add eax, ecx
-    mov [decoded_str_pos], eax
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
     xor eax, eax
     jmp .done
 
-.too_long:
-    mov dword [token_error_kind], 3
+.enc3:
+    mov eax, ebx
+    shr eax, 12
+    or al, 0E0h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+
+    mov eax, ebx
+    shr eax, 6
+    and al, 3Fh
+    or al, 80h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+
+    mov eax, ebx
+    and al, 3Fh
+    or al, 80h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+    xor eax, eax
+    jmp .done
+
+.enc4:
+    mov eax, ebx
+    shr eax, 18
+    or al, 0F0h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+
+    mov eax, ebx
+    shr eax, 12
+    and al, 3Fh
+    or al, 80h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+
+    mov eax, ebx
+    shr eax, 6
+    and al, 3Fh
+    or al, 80h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+
+    mov eax, ebx
+    and al, 3Fh
+    or al, 80h
+    call append_raw_byte
+    cmp eax, 0
+    jne .done_fail
+    xor eax, eax
+    jmp .done
+
+.done_fail:
+    cmp dword [token_error_kind], 0
+    jne .done
+    mov dword [token_error_kind], 5
     mov eax, -1
     jmp .done
 
@@ -300,13 +389,13 @@ append_utf8_cp:
     mov eax, -1
 
 .done:
-    pop edi
     pop edx
     pop ecx
     pop ebx
     ret
 
 parse_fixed_hex:
+
     push ebx
     xor edx, edx
 .loop:
@@ -537,12 +626,19 @@ lex_next:
     mov dword [token_type], TOK_INT
     jmp .done
 
+
 .string:
     call cur_next
-    mov eax, [decoded_str_pos]
-    mov [string_start_pos], eax
-    lea eax, [decoded_str_buf + eax]
-    mov [token_value], eax
+    mov dword [string_buf_ptr], 0
+    mov dword [string_buf_len], 0
+    mov dword [string_buf_cap], 0
+
+    mov eax, 1
+    call string_ensure_capacity
+    cmp eax, 0
+    jne .fail
+    mov eax, [string_buf_ptr]
+    mov byte [eax], 0
 
 .str_loop:
     call cur_peek
@@ -645,7 +741,7 @@ lex_next:
     call cur_next
     mov eax, 12
     jmp .emit_cp
-    
+
 .esc_backslash:
     call cur_next
     mov eax, 92
@@ -671,8 +767,9 @@ lex_next:
     jmp .fail
 
 .str_done:
-    mov eax, [decoded_str_pos]
-    sub eax, [string_start_pos]
+    mov eax, [string_buf_ptr]
+    mov [token_value], eax
+    mov eax, [string_buf_len]
     mov [token_len], eax
     call cur_next
     mov dword [token_type], TOK_STRING
@@ -692,3 +789,5 @@ lex_next:
 
 .done:
     ret
+
+
